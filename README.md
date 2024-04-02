@@ -1,17 +1,14 @@
-# Assignment 3: A Simple CUDA Renderer #
+#  A Simple CUDA Renderer #
 
-**Due:  Wed Nov 8, 11:59PM PST**
 
-**100 points total**
 
 ![My Image](handout/teaser.jpg?raw=true)
 
 ## Overview ##
 
-In this assignment you will write a parallel renderer in CUDA that draws colored circles. 
+In this project you will write a parallel renderer in CUDA that draws colored circles. 
 While this renderer is very simple, parallelizing the renderer will require you to design and implement data structures 
-that can be efficiently constructed and manipulated in parallel. This is a challenging
-assignment so you are advised to start early. __Seriously, you are advised to start early.__ Good luck!
+that can be efficiently constructed and manipulated in parallel. 
 
 ## Environment Setup ##
 
@@ -55,7 +52,7 @@ Host github.com
 You should now be able to pull and push commits from the server and locally!
 
 
-## Part 1: CUDA Warm-Up 1: SAXPY (5 pts) ##
+## Part 1: CUDA Warm-Up 1: SAXPY  ##
 
 To gain a bit of practice writing CUDA programs your warm-up task is to re-implement the SAXPY function
 from Assignment 1 in CUDA. Starter code for this part of the assignment is located in the `/saxpy` directory
@@ -97,7 +94,7 @@ SAXPY (recall your results from saxpy on Program 5 from Assignment 1)?
 __Question 2.__ Compare and explain the difference between the results
 provided by two sets of timers (timing only the kernel execution vs. timing the entire process of moving data to the GPU and back in addition to the kernel execution). Are the bandwidth values observed *roughly* consistent with the reported bandwidths available to the different components of the machine? (You should use the web to track down the memory bandwidth of an NVIDIA T4 GPU. Hint: <https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/tesla-t4/t4-tensor-core-datasheet-951643.pdf>. The expected bandwidth of memory bus of AWS is 4 GB/s, which does not match that of a 16-lane [PCIe 3.0](https://en.wikipedia.org/wiki/PCI_Express). Several factors prevent peak bandwidth, including CPU motherboard chipset performance and whether or not the host CPU memory used as the source of the transfer is “pinned” — the latter allows the GPU to directly access memory without going through virtual memory address translation. If you are interested, you can find more info here: <https://kth.instructure.com/courses/12406/pages/optimizing-host-device-data-communication-i-pinned-host-memory>)
 
-## Part 2: CUDA Warm-Up 2: Parallel Prefix-Sum (10 pts) ##
+## Part 2: CUDA Warm-Up 2: Parallel Prefix-Sum ##
 
 Now that you're familiar with the basic structure and layout of CUDA programs, as a second exercise you are asked to come up with parallel implementation of the function `find_repeats` which, given a list of integers `A`, returns a list of all indices `i` for which `A[i] == A[i+1]`.
 
@@ -190,7 +187,7 @@ You can also use the `-n <size>` option to change the length of the input array.
 
 The argument `--thrust` will use the [Thrust Library's](http://thrust.github.io/) implementation of [exclusive scan](http://thrust.github.io/doc/group__prefixsums.html).  __Up to two points of extra credit for anyone that can create an implementation is competitive with Thrust.__
 
-## Part 3: A Simple Circle Renderer (85 pts) ##
+## Part 3: A Simple Circle Renderer ##
 
 Now for the real show!
 
@@ -342,29 +339,8 @@ Aspects of your work that you should mention in the write-up include:
 5. What, if any, steps did you take to reduce communication requirements (e.g., synchronization or main memory bandwidth requirements)?
 6. Briefly describe how you arrived at your final solution. What other approaches did you try along the way. What was wrong with them?
 
-### Grading Guidelines ###
 
-* The write-up for the assignment is worth 7 points.
-* Your implementation is worth 72 points. These are equally divided into 12 points per scene as follows:
-    - 2 correctness points per scene. 
-    - 10 performance points per scene (only obtainable if the solution is correct).  Your performance will be graded with respect to the performance of a provided benchmark reference renderer, T<sub>ref</sub>: 
-        - No performance points will be given for solutions having time (T) 10 times the magnitude of T<sub>ref</sub>. 
-        - Full performance points will be given for solutions within 20% of the optimized solution ( T < 1.20 * T<sub>ref</sub> )
-        - For other values of T (for 1.20 T<sub>ref</sub> <= T < 10 * T<sub>ref</sub>), your performance score on a scale 1 to 10 will be calculated as: `10 * T_ref / T`.
-* Your implementation's performance on the class leaderboard is worth the final 6 points. Submission and grading details for the leaderboard will be detailed in a subsequent Ed post.
-
-* Up to five points extra credit (instructor discretion) for solutions that achieve significantly greater performance than required. Your write up must clearly explain your approach thoroughly.
-* Up to five points extra credit (instructor discretion) for a high-quality parallel CPU-only renderer implementation that achieves good utilization of all cores and SIMD vector units of the cores. Feel free to use any tools at your disposal (e.g., SIMD intrinsics, ISPC, pthreads).  To receive credit you should analyze the performance of your GPU and CPU-based solutions and discuss the reasons for differences in implementation choices made.
-
-So the total points for this project is as follows:
-* part 1 (5 points)
-* part 2 (10 points)
-* part 3 write up (7 points)
-* part 3 implementation (72 points)
-* part 3 leaderboard (6 points)
-* potential __extra__ credit (up to 10 points)
-
-## Assignment Tips and Hints ##
+## Tips and Hints ##
 
 Below are a set of tips and hints compiled from previous years.  Note that there are various ways to implement your renderer and not all hints may apply to your approach.
 
