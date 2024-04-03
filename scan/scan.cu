@@ -12,6 +12,10 @@
 
 #include "CycleTimer.h"
 
+#include <cmath> // For log2 and pow
+
+
+
 #define THREADS_PER_BLOCK 256
 
 
@@ -26,6 +30,30 @@ static inline int nextPow2(int n) {
     n++;
     return n;
 }
+
+// Exclusive Scan: Upsweep Phase
+// The upsweep phase computes partial sums and stores them in the tree structure. This phase goes from the leaves to the root of the tree.
+__global__ void upsweep(int *data, int N, int two_d, int two_dplus1) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int i = idx * two_dplus1;
+    if (i < N) {
+        data[i + two_dplus1 - 1] += data[i + two_d - 1];
+    }
+}
+
+
+// Exclusive Scan: Downsweep Phase
+// The downsweep phase fills in the blanks and computes the final exclusive scan result, working from the root to the leaves.
+__global__ void downsweep(int *data, int N, int two_d, int two_dplus1) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int i = idx * two_dplus1;
+    if (i < N) {
+        int t = data[i + two_d - 1];
+        data[i + two_d - 1] = data[i + two_dplus1 - 1];
+        data[i + two_dplus1 - 1] += t;
+    }
+}
+
 
 // exclusive_scan --
 //
@@ -42,9 +70,8 @@ static inline int nextPow2(int n) {
 // Also, as per the comments in cudaScan(), you can implement an
 // "in-place" scan, since the timing harness makes a copy of input and
 // places it in result
-void exclusive_scan(int* input, int N, int* result)
-{
-
+void exclusive_scan(int* input, int N, int* result) {
+    
     // CS149 TODO:
     //
     // Implement your exclusive scan implementation here.  Keep in
@@ -53,9 +80,40 @@ void exclusive_scan(int* input, int N, int* result)
     // on the CPU.  Your implementation will need to make multiple calls
     // to CUDA kernel functions (that you must write) to implement the
     // scan.
+    
+    // Allocate memory on the device
+    int *device_input;
+    cudaMalloc(&device_input, sizeof(int) * N);
+    cudaMemcpy(device_input, input, sizeof(int) * N, cudaMemcpyHostToDevice);
 
+    int rounds = log2(static_cast<double>(N));
+    
+    // Upsweep phase
+    for (int d = 0; d < rounds; ++d) {
+        int two_d = 1 << d;
+        int two_dplus1 = 1 << (d + 1);
+        int num_blocks = (N + two_dplus1 - 1) / two_dplus1;
+        // Launch upsweep kernel
+        upsweep<<<num_blocks, THREADS_PER_BLOCK>>>(device_input, N, two_d, two_dplus1);
+    }
 
+    // Set the last element to 0 for exclusive scan
+    // Launch downsweep kernels in reverse order
+    cudaMemset(device_input + N - 1, 0, sizeof(int));
+
+    // Downsweep phase
+    for (int d = rounds - 1; d >= 0; --d) {
+        int two_d = 1 << d;
+        int two_dplus1 = 1 << (d + 1);
+        int num_blocks = (N + two_dplus1 - 1) / two_dplus1;
+        downsweep<<<num_blocks, THREADS_PER_BLOCK>>>(device_input, N, two_d, two_dplus1);
+    }
+
+    // Copy result back to host
+    cudaMemcpy(result, device_input, sizeof(int) * N, cudaMemcpyDeviceToHost);
+    cudaFree(device_input);
 }
+
 
 
 //
@@ -141,14 +199,37 @@ double cudaScanThrust(int* inarray, int* end, int* resultarray) {
 }
 
 
+
+
+// Mark Repeats in the Array
+// This CUDA kernel compares each element with the next one and marks 1 if they are equal, indicating a repeat, and 0 otherwise.
+__global__ void mark_repeats(const int* input, int* markers, int N) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx < N - 1) {
+        markers[idx] = (input[idx] == input[idx + 1]) ? 1 : 0;
+    }
+}
+
+
+
+
+// Scatter Repeats Based on Prefix Sums
+// After computing the prefix sum of the marked array, this kernel scatters the indices of repeats into the final output array.
+__global__ void scatter_repeats(const int* markers, const int* scanned_markers, int* output, int N) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx < N - 1 && markers[idx] == 1) {
+        output[scanned_markers[idx]] = idx;
+    }
+}
+
+
 // find_repeats --
 //
 // Given an array of integers `device_input`, returns an array of all
 // indices `i` for which `device_input[i] == device_input[i+1]`.
 //
 // Returns the total number of pairs found
-int find_repeats(int* device_input, int length, int* device_output) {
-
+int find_repeats(int* input, int N, int* output) {
     // CS149 TODO:
     //
     // Implement this function. You will probably want to
@@ -160,9 +241,41 @@ int find_repeats(int* device_input, int length, int* device_output) {
     // exclusive_scan function with them. However, your implementation
     // must ensure that the results of find_repeats are correct given
     // the actual array length.
+    
+    int *device_input, *device_markers, *device_scanned_markers, *device_output;
+    cudaMalloc(&device_input, sizeof(int) * N);
+    cudaMalloc(&device_markers, sizeof(int) * (N - 1)); // One less than N, as we compare each element with the next
+    cudaMalloc(&device_scanned_markers, sizeof(int) * (N - 1));
+    cudaMalloc(&device_output, sizeof(int) * (N - 1)); // Output can't be larger than N - 1
 
-    return 0; 
+    cudaMemcpy(device_input, input, sizeof(int) * N, cudaMemcpyHostToDevice);
+
+    int threadsPerBlock = 256;
+    int blocks = (N + threadsPerBlock - 1) / threadsPerBlock;
+
+    // Mark repeats
+    mark_repeats<<<blocks, threadsPerBlock>>>(device_input, device_markers, N);
+
+    // Perform exclusive scan on markers
+    exclusive_scan(device_markers, N - 1, device_scanned_markers);
+
+    // Scatter the indices of repeats
+    scatter_repeats<<<blocks, threadsPerBlock>>>(device_markers, device_scanned_markers, device_output, N);
+
+    // Count repeats and copy back to host
+    int repeatsCount;
+    cudaMemcpy(&repeatsCount, device_scanned_markers + N - 2, sizeof(int), cudaMemcpyDeviceToHost); // Last element of scanned array gives count
+
+    cudaMemcpy(output, device_output, sizeof(int) * repeatsCount, cudaMemcpyDeviceToHost);
+
+    cudaFree(device_input);
+    cudaFree(device_markers);
+    cudaFree(device_scanned_markers);
+    cudaFree(device_output);
+
+    return repeatsCount; // Return the number of repeats found
 }
+
 
 
 //

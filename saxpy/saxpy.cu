@@ -113,8 +113,6 @@ void saxpyCuda(int N, float alpha, float *xarray, float *yarray, float *resultar
     // end timing after result has been copied back into host memory
     double endTime = CycleTimer::currentSeconds();
 
-    double overallDuration = endTime - startTime;
-    printf("Effective BW by CUDA saxpy: %.3f ms\t\t[%.3f GB/s]\n", 1000.f * overallDuration, GBPerSec(totalBytes, overallDuration));
 
     cudaError_t errCode = cudaPeekAtLastError();
     if (errCode != cudaSuccess)
