@@ -18,7 +18,7 @@ CXXFLAGS=-O3 -Wall
 LDFLAGS=-L/usr/local/cuda/lib64/ -lcudart
 NVCC=nvcc
 NVCCFLAGS=-O3 -m64 -ccbin /usr/bin/g++-9 -Xcompiler -std=c++11
-
+# NVCCFLAGS=-O3 -m64
 
 OBJS=$(OBJDIR)/main.o  $(OBJDIR)/scan.o
 
@@ -43,7 +43,7 @@ $(EXECUTABLE): dirs $(OBJS)
 		$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LDFLAGS)
 
 $(OBJDIR)/%.o: %.cpp
-		$(CXX) $(CXXFLAGS) -c $< -o $@
+		$(CXX) $< $(CXXFLAGS) -c -o $@
 
 $(OBJDIR)/%.o: %.cu
-		$(NVCC) $(NVCCFLAGS) -c $< -o $@
+		$(NVCC) $< $(NVCCFLAGS) -c -o $@

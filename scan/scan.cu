@@ -12,10 +12,6 @@
 
 #include "CycleTimer.h"
 
-#include <cmath> // For log2 and pow
-
-
-
 #define THREADS_PER_BLOCK 256
 
 
@@ -31,28 +27,8 @@ static inline int nextPow2(int n) {
     return n;
 }
 
-// Exclusive Scan: Upsweep Phase
-// The upsweep phase computes partial sums and stores them in the tree structure. This phase goes from the leaves to the root of the tree.
-__global__ void upsweep(int *data, int N, int two_d, int two_dplus1) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int i = idx * two_dplus1;
-    if (i < N) {
-        data[i + two_dplus1 - 1] += data[i + two_d - 1];
-    }
-}
 
 
-// Exclusive Scan: Downsweep Phase
-// The downsweep phase fills in the blanks and computes the final exclusive scan result, working from the root to the leaves.
-__global__ void downsweep(int *data, int N, int two_d, int two_dplus1) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int i = idx * two_dplus1;
-    if (i < N) {
-        int t = data[i + two_d - 1];
-        data[i + two_d - 1] = data[i + two_dplus1 - 1];
-        data[i + two_dplus1 - 1] += t;
-    }
-}
 
 
 // exclusive_scan --
@@ -70,49 +46,100 @@ __global__ void downsweep(int *data, int N, int two_d, int two_dplus1) {
 // Also, as per the comments in cudaScan(), you can implement an
 // "in-place" scan, since the timing harness makes a copy of input and
 // places it in result
-void exclusive_scan(int* input, int N, int* result) {
+// void exclusive_scan(int* input, int N, int* result) {
     
-    // CS149 TODO:
-    //
-    // Implement your exclusive scan implementation here.  Keep in
-    // mind that although the arguments to this function are device
-    // allocated arrays, this is a function that is running in a thread
-    // on the CPU.  Your implementation will need to make multiple calls
-    // to CUDA kernel functions (that you must write) to implement the
-    // scan.
-    
-    // Allocate memory on the device
-    int *device_input;
-    cudaMalloc(&device_input, sizeof(int) * N);
-    cudaMemcpy(device_input, input, sizeof(int) * N, cudaMemcpyHostToDevice);
+//     // CS149 TODO:
+//     //
+//     // Implement your exclusive scan implementation here.  Keep in
+//     // mind that although the arguments to this function are device
+//     // allocated arrays, this is a function that is running in a thread
+//     // on the CPU.  Your implementation will need to make multiple calls
+//     // to CUDA kernel functions (that you must write) to implement the
+//     // scan.
+//     // Allocate and initialize device memory
 
-    int rounds = log2(static_cast<double>(N));
-    
-    // Upsweep phase
-    for (int d = 0; d < rounds; ++d) {
-        int two_d = 1 << d;
-        int two_dplus1 = 1 << (d + 1);
-        int num_blocks = (N + two_dplus1 - 1) / two_dplus1;
-        // Launch upsweep kernel
-        upsweep<<<num_blocks, THREADS_PER_BLOCK>>>(device_input, N, two_d, two_dplus1);
-    }
+// }
 
-    // Set the last element to 0 for exclusive scan
-    // Launch downsweep kernels in reverse order
-    cudaMemset(device_input + N - 1, 0, sizeof(int));
 
-    // Downsweep phase
-    for (int d = rounds - 1; d >= 0; --d) {
-        int two_d = 1 << d;
-        int two_dplus1 = 1 << (d + 1);
-        int num_blocks = (N + two_dplus1 - 1) / two_dplus1;
-        downsweep<<<num_blocks, THREADS_PER_BLOCK>>>(device_input, N, two_d, two_dplus1);
-    }
 
-    // Copy result back to host
-    cudaMemcpy(result, device_input, sizeof(int) * N, cudaMemcpyDeviceToHost);
-    cudaFree(device_input);
+//correct sol 1
+// void exclusive_scan(int* input, int N, int* result) {
+//     // Wrap raw pointers with device_ptr
+//     thrust::device_ptr<int> dev_input(input);
+//     thrust::device_ptr<int> dev_result(result);
+
+//     // Perform the exclusive scan
+//     thrust::exclusive_scan(dev_input, dev_input + N, dev_result);
+// }
+
+//Correct sol 2
+__global__ void local_sum(int* device_result, int* partial_result, int range) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int l = index * range, r = l + range;
+    for (int i=l+1; i<r; i++)
+        device_result[i] += device_result[i-1];
+    partial_result[index] = device_result[r-1];
 }
+
+__global__ void forward(int* device_result, int der) {
+    int index = (blockIdx.x * blockDim.x + threadIdx.x) * der * 2;
+    device_result[index + (der*2) - 1] += device_result[index + der - 1];
+}
+
+__global__ void backward(int* device_result, int der) {
+    int l = (blockIdx.x * blockDim.x + threadIdx.x) * der * 2 + der - 1;
+    int r = l + der;
+    int t = device_result[l];
+    device_result[l] = device_result[r];
+    device_result[r] += t;
+}
+
+__global__ void set_to_zero(int *device_result, int index) {
+    device_result[index] = 0;
+}
+
+__global__ void to_result(int* device_result, int* device_start, int* partial_result, int range, int n) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int l = index * range, r = l + range;
+    if (r != n)
+        device_result[r]  = device_start[r-1] + partial_result[index];
+    for (int i=r-1; i>l; i--)
+        device_result[i] = device_start[i-1] + partial_result[index];
+} 
+
+void exclusive_scan(int* device_start, int length, int* device_result)
+{
+    /* Fill in this function with your exclusive scan implementation.
+     * You are passed the locations of the input and output in device memory,
+     * but this is host code -- you will need to declare one or more CUDA 
+     * kernels (with the __global__ decorator) in order to actually run code
+     * in parallel on the GPU.
+     * Note you are given the real length of the array, but may assume that
+     * both the input and the output arrays are sized to accommodate the next
+     * power of 2 larger than the input.
+     */
+    int n = nextPow2(length);
+    const int totalBlocks = min(n, 8192);
+    int* partial_result;
+    cudaMalloc((void**)&partial_result, sizeof(int)*totalBlocks);
+    int range = n/totalBlocks;
+    local_sum<<<totalBlocks, 1>>>(device_start, partial_result, range);
+    for (int der = 1; der < totalBlocks; der<<=1) {
+        forward<<<totalBlocks/der/2, 1>>>(partial_result, der);
+    }
+    set_to_zero<<<1,1>>>(partial_result, totalBlocks-1);
+    for (int der = totalBlocks/2; der >= 1; der >>= 1) {
+        backward<<<totalBlocks/der/2, 1>>>(partial_result, der);
+    }
+    to_result<<<totalBlocks, 1>>>(device_result, device_start, partial_result, range, n);
+    set_to_zero<<<1,1>>>(device_result, 0);
+    cudaFree(partial_result);
+}
+
+
+
+
+
 
 
 
@@ -201,26 +228,7 @@ double cudaScanThrust(int* inarray, int* end, int* resultarray) {
 
 
 
-// Mark Repeats in the Array
-// This CUDA kernel compares each element with the next one and marks 1 if they are equal, indicating a repeat, and 0 otherwise.
-__global__ void mark_repeats(const int* input, int* markers, int N) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (idx < N - 1) {
-        markers[idx] = (input[idx] == input[idx + 1]) ? 1 : 0;
-    }
-}
 
-
-
-
-// Scatter Repeats Based on Prefix Sums
-// After computing the prefix sum of the marked array, this kernel scatters the indices of repeats into the final output array.
-__global__ void scatter_repeats(const int* markers, const int* scanned_markers, int* output, int N) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (idx < N - 1 && markers[idx] == 1) {
-        output[scanned_markers[idx]] = idx;
-    }
-}
 
 
 // find_repeats --
@@ -229,54 +237,77 @@ __global__ void scatter_repeats(const int* markers, const int* scanned_markers, 
 // indices `i` for which `device_input[i] == device_input[i+1]`.
 //
 // Returns the total number of pairs found
-int find_repeats(int* input, int N, int* output) {
-    // CS149 TODO:
-    //
-    // Implement this function. You will probably want to
-    // make use of one or more calls to exclusive_scan(), as well as
-    // additional CUDA kernel launches.
-    //    
-    // Note: As in the scan code, the calling code ensures that
-    // allocated arrays are a power of 2 in size, so you can use your
-    // exclusive_scan function with them. However, your implementation
-    // must ensure that the results of find_repeats are correct given
-    // the actual array length.
+// int find_repeats(int* device_input, int length, int* device_output) {
     
-    int *device_input, *device_markers, *device_scanned_markers, *device_output;
-    cudaMalloc(&device_input, sizeof(int) * N);
-    cudaMalloc(&device_markers, sizeof(int) * (N - 1)); // One less than N, as we compare each element with the next
-    cudaMalloc(&device_scanned_markers, sizeof(int) * (N - 1));
-    cudaMalloc(&device_output, sizeof(int) * (N - 1)); // Output can't be larger than N - 1
+//     // CS149 TODO:
+//     //
+//     // Implement this function. You will probably want to
+//     // make use of one or more calls to exclusive_scan(), as well as
+//     // additional CUDA kernel launches.
+//     //    
+//     // Note: As in the scan code, the calling code ensures that
+//     // allocated arrays are a power of 2 in size, so you can use your
+//     // exclusive_scan function with them. However, your implementation
+//     // must ensure that the results of find_repeats are correct given
+//     // the actual array length.
 
-    cudaMemcpy(device_input, input, sizeof(int) * N, cudaMemcpyHostToDevice);
+// }
 
-    int threadsPerBlock = 256;
-    int blocks = (N + threadsPerBlock - 1) / threadsPerBlock;
 
-    // Mark repeats
-    mark_repeats<<<blocks, threadsPerBlock>>>(device_input, device_markers, N);
 
-    // Perform exclusive scan on markers
-    exclusive_scan(device_markers, N - 1, device_scanned_markers);
-
-    // Scatter the indices of repeats
-    scatter_repeats<<<blocks, threadsPerBlock>>>(device_markers, device_scanned_markers, device_output, N);
-
-    // Count repeats and copy back to host
-    int repeatsCount;
-    cudaMemcpy(&repeatsCount, device_scanned_markers + N - 2, sizeof(int), cudaMemcpyDeviceToHost); // Last element of scanned array gives count
-
-    cudaMemcpy(output, device_output, sizeof(int) * repeatsCount, cudaMemcpyDeviceToHost);
-
-    cudaFree(device_input);
-    cudaFree(device_markers);
-    cudaFree(device_scanned_markers);
-    cudaFree(device_output);
-
-    return repeatsCount; // Return the number of repeats found
+__global__ void find_repeat_pos(int* a, int *eq, int range, int length) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int l = index * range, r = min(l + range, length);
+    int cnt = 0;
+    if (index == 0) {
+        l++;
+    }
+    for (int i=l; i<r; i++)
+        cnt += (a[i] == a[i-1]);
+    eq[index] = cnt;
 }
 
+__global__ void copy_to_output(int* out, int* a, int* pos, int range, int length) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int l = index * range, r = min(l + range, length);
+    int id = pos[index];
+    if (index == 0)
+        l++;
+    for (int i=l; i<r; i++)
+        if (a[i] == a[i-1]) {
+            out[id++] = i-1;
+        }
+    pos[index] = id;
+}
 
+int find_repeats(int *device_input, int length, int *device_output) {
+    /* Finds all pairs of adjacent repeated elements in the list, storing the
+     * indices of the first element of each pair (in order) into device_result.
+     * Returns the number of pairs found.
+     * Your task is to implement this function. You will probably want to
+     * make use of one or more calls to exclusive_scan(), as well as
+     * additional CUDA kernel launches.
+     * Note: As in the scan code, we ensure that allocated arrays are a power
+     * of 2 in size, so you can use your exclusive_scan function with them if 
+     * it requires that. However, you must ensure that the results of
+     * find_repeats are correct given the original length.
+     */    
+    int n = nextPow2(length);
+    const int totalBlocks = min(n, 8192);
+    int *eq_pos, *eq_idx;
+    cudaMalloc((void**)&eq_pos, sizeof(int)*totalBlocks);
+    cudaMalloc((void**)&eq_idx, sizeof(int)*totalBlocks);
+    int range = n/totalBlocks;
+    find_repeat_pos<<<totalBlocks, 1>>>(device_input, eq_pos, range, length);
+    int* out = new int[totalBlocks];
+    exclusive_scan(eq_pos, totalBlocks, eq_idx);
+    copy_to_output<<<totalBlocks, 1>>>(device_output, device_input, eq_idx, range, length);
+    int ret;
+    cudaMemcpy(&ret, &eq_idx[totalBlocks-1], sizeof(int), cudaMemcpyDeviceToHost);
+    cudaFree(eq_pos);
+    cudaFree(eq_idx);
+    return ret;
+}
 
 //
 // cudaFindRepeats --
